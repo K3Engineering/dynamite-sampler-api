@@ -1,6 +1,5 @@
-{# Shared type tables: struct format codes and byte sizes for primitive types. #}
+{# Shared type table: struct format codes for primitive types. #}
 {% set INT_FORMATS = {'uint8': 'B', 'int8': 'b', 'uint16': 'H', 'uint32': 'I'} %}
-{% set TYPE_SIZES = {'uint8': 1, 'int8': 1, 'uint16': 2, 'int24': 3, 'uint32': 4} %}
 {% set ENUM_NAMES = enums | map(attribute='name') | list %}
 
 {% macro docstring(text, ind) -%}
@@ -13,32 +12,28 @@
 {% if t in INT_FORMATS or t == 'int24' %}int{% elif t == 'Utf8String' %}str{% elif t == 'Bytes' %}bytes{% else %}{{ t }}{% endif %}
 {%- endmacro %}
 
-{# Unpacks one struct field from `data` at `offset`, advancing `offset`. #}
-{% macro unpack_field(field, ind) -%}
+{# Unpacks one struct field from `data` at the absolute offset in `ns.offset`. #}
+{% macro unpack_field(field, ns) -%}
 {% if field.is_list %}
-{{ ind }}_{{ field.name }} = []
-{{ ind }}while offset < len(data):
-{{ ind }}    item, bytes_read = {{ field.type }}.unpack_with_size(data[offset:])
-{{ ind }}    _{{ field.name }}.append(item)
-{{ ind }}    offset += bytes_read
+_{{ field.name }} = [{{ field.type }}.unpack(data[_i:_i + {{ field.item_size }}]) for _i in range({{ ns.offset }}, len(data), {{ field.item_size }})]
 {% elif field.type in INT_FORMATS %}
-{{ ind }}_{{ field.name }} = struct.unpack_from('<{{ INT_FORMATS[field.type] }}', data, offset)[0]
-{{ ind }}offset += {{ TYPE_SIZES[field.type] }}
+_{{ field.name }} = struct.unpack_from('<{{ INT_FORMATS[field.type] }}', data, {{ ns.offset }})[0]
+{% set ns.offset = ns.offset + field.size %}
 {% elif field.type == 'int24' %}
-{{ ind }}_{{ field.name }} = _unpack_int24(data, offset)
-{{ ind }}offset += {{ TYPE_SIZES[field.type] }}
+_{{ field.name }} = int.from_bytes(data[{{ ns.offset }}:{{ ns.offset + field.size }}], byteorder='little', signed=True)
+{% set ns.offset = ns.offset + field.size %}
 {% elif field.type in ENUM_NAMES %}
-{{ ind }}_{{ field.name }} = {{ field.type }}(struct.unpack_from('<B', data, offset)[0])
-{{ ind }}offset += 1
+_{{ field.name }} = {{ field.type }}(data[{{ ns.offset }}])
+{% set ns.offset = ns.offset + 1 %}
 {% else %}
-{{ ind }}_{{ field.name }}, bytes_read = {{ field.type }}.unpack_with_size(data[offset:])
-{{ ind }}offset += bytes_read
+_{{ field.name }} = {{ field.type }}.unpack(data[{{ ns.offset }}:{{ ns.offset + field.size }}])
+{% set ns.offset = ns.offset + field.size %}
 {% endif %}
 {%- endmacro %}
 
 {# Expression that unpacks a whole-characteristic payload from `data`. #}
 {% macro unpack_payload_expr(t) -%}
-{% if t in INT_FORMATS %}struct.unpack('<{{ INT_FORMATS[t] }}', data)[0]{% elif t == 'int24' %}_unpack_int24(data, 0){% elif t == 'Utf8String' %}data.decode('utf-8'){% elif t == 'Bytes' %}data{% elif t in ENUM_NAMES %}{{ t }}(struct.unpack('<B', data)[0]){% else %}{{ t }}.unpack(data){% endif %}
+{% if t in INT_FORMATS %}struct.unpack('<{{ INT_FORMATS[t] }}', data)[0]{% elif t == 'int24' %}int.from_bytes(data, byteorder='little', signed=True){% elif t == 'Utf8String' %}data.decode('utf-8'){% elif t == 'Bytes' %}data{% elif t in ENUM_NAMES %}{{ t }}(struct.unpack('<B', data)[0]){% else %}{{ t }}.unpack(data){% endif %}
 {%- endmacro %}
 
 {# Statement that packs a whole-characteristic payload from `data`. #}
@@ -51,11 +46,6 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Generic, TypeVar
-
-
-def _unpack_int24(data: bytes, offset: int) -> int:
-    """Unpacks a 3-byte little-endian signed integer."""
-    return int.from_bytes(data[offset:offset + 3], byteorder='little', signed=True)
 
 
 def _pack_int24(value: int) -> bytes:
@@ -123,22 +113,13 @@ class {{ struct.name }}:
 {% endfor %}
 
     @classmethod
-    def unpack_with_size(cls, data: bytes) -> tuple['{{ struct.name }}', int]:
-        """Unpacks this struct from raw bytes.
-
-        Returns the instantiated object and the number of bytes consumed.
-        """
-        offset = 0
-{% for field in struct.fields %}
-{{ unpack_field(field, '        ') -}}
-{% endfor %}
-        return cls({% for field in struct.fields %}_{{ field.name }}{% if not loop.last %}, {% endif %}{% endfor %}), offset
-
-    @classmethod
     def unpack(cls, data: bytes) -> '{{ struct.name }}':
         """Unpacks this struct from raw bytes."""
-        obj, _ = cls.unpack_with_size(data)
-        return obj
+{% set ns = namespace(offset=0) %}
+{% for field in struct.fields %}
+        {{ unpack_field(field, ns) -}}
+{% endfor %}
+        return cls({% for field in struct.fields %}_{{ field.name }}{% if not loop.last %}, {% endif %}{% endfor %})
 {% endfor %}
 
 

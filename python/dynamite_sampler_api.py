@@ -5,11 +5,6 @@ from enum import IntEnum
 from typing import Generic, TypeVar
 
 
-def _unpack_int24(data: bytes, offset: int) -> int:
-    """Unpacks a 3-byte little-endian signed integer."""
-    return int.from_bytes(data[offset : offset + 3], byteorder="little", signed=True)
-
-
 def _pack_int24(value: int) -> bytes:
     """Packs an integer as a 3-byte little-endian signed integer."""
     return value.to_bytes(3, byteorder="little", signed=True)
@@ -77,31 +72,15 @@ class ADCConfigData:
     pga: int
 
     @classmethod
-    def unpack_with_size(cls, data: bytes) -> tuple["ADCConfigData", int]:
-        """Unpacks this struct from raw bytes.
-
-        Returns the instantiated object and the number of bytes consumed.
-        """
-        offset = 0
-        _version = struct.unpack_from("<B", data, offset)[0]
-        offset += 1
-        _id = struct.unpack_from("<H", data, offset)[0]
-        offset += 2
-        _status = struct.unpack_from("<H", data, offset)[0]
-        offset += 2
-        _mode = struct.unpack_from("<H", data, offset)[0]
-        offset += 2
-        _clock = struct.unpack_from("<H", data, offset)[0]
-        offset += 2
-        _pga = struct.unpack_from("<H", data, offset)[0]
-        offset += 2
-        return cls(_version, _id, _status, _mode, _clock, _pga), offset
-
-    @classmethod
     def unpack(cls, data: bytes) -> "ADCConfigData":
         """Unpacks this struct from raw bytes."""
-        obj, _ = cls.unpack_with_size(data)
-        return obj
+        _version = struct.unpack_from("<B", data, 0)[0]
+        _id = struct.unpack_from("<H", data, 1)[0]
+        _status = struct.unpack_from("<H", data, 3)[0]
+        _mode = struct.unpack_from("<H", data, 5)[0]
+        _clock = struct.unpack_from("<H", data, 7)[0]
+        _pga = struct.unpack_from("<H", data, 9)[0]
+        return cls(_version, _id, _status, _mode, _clock, _pga)
 
 
 @dataclass
@@ -116,27 +95,13 @@ class FeedData:
     ch3: int
 
     @classmethod
-    def unpack_with_size(cls, data: bytes) -> tuple["FeedData", int]:
-        """Unpacks this struct from raw bytes.
-
-        Returns the instantiated object and the number of bytes consumed.
-        """
-        offset = 0
-        _ch0 = _unpack_int24(data, offset)
-        offset += 3
-        _ch1 = _unpack_int24(data, offset)
-        offset += 3
-        _ch2 = _unpack_int24(data, offset)
-        offset += 3
-        _ch3 = _unpack_int24(data, offset)
-        offset += 3
-        return cls(_ch0, _ch1, _ch2, _ch3), offset
-
-    @classmethod
     def unpack(cls, data: bytes) -> "FeedData":
         """Unpacks this struct from raw bytes."""
-        obj, _ = cls.unpack_with_size(data)
-        return obj
+        _ch0 = int.from_bytes(data[0:3], byteorder="little", signed=True)
+        _ch1 = int.from_bytes(data[3:6], byteorder="little", signed=True)
+        _ch2 = int.from_bytes(data[6:9], byteorder="little", signed=True)
+        _ch3 = int.from_bytes(data[9:12], byteorder="little", signed=True)
+        return cls(_ch0, _ch1, _ch2, _ch3)
 
 
 @dataclass
@@ -148,21 +113,10 @@ class FeedHeader:
     sample_sequence_number: int
 
     @classmethod
-    def unpack_with_size(cls, data: bytes) -> tuple["FeedHeader", int]:
-        """Unpacks this struct from raw bytes.
-
-        Returns the instantiated object and the number of bytes consumed.
-        """
-        offset = 0
-        _sample_sequence_number = struct.unpack_from("<H", data, offset)[0]
-        offset += 2
-        return cls(_sample_sequence_number), offset
-
-    @classmethod
     def unpack(cls, data: bytes) -> "FeedHeader":
         """Unpacks this struct from raw bytes."""
-        obj, _ = cls.unpack_with_size(data)
-        return obj
+        _sample_sequence_number = struct.unpack_from("<H", data, 0)[0]
+        return cls(_sample_sequence_number)
 
 
 @dataclass
@@ -175,26 +129,13 @@ class FeedPacket:
     samples: list[FeedData]
 
     @classmethod
-    def unpack_with_size(cls, data: bytes) -> tuple["FeedPacket", int]:
-        """Unpacks this struct from raw bytes.
-
-        Returns the instantiated object and the number of bytes consumed.
-        """
-        offset = 0
-        _header, bytes_read = FeedHeader.unpack_with_size(data[offset:])
-        offset += bytes_read
-        _samples = []
-        while offset < len(data):
-            item, bytes_read = FeedData.unpack_with_size(data[offset:])
-            _samples.append(item)
-            offset += bytes_read
-        return cls(_header, _samples), offset
-
-    @classmethod
     def unpack(cls, data: bytes) -> "FeedPacket":
         """Unpacks this struct from raw bytes."""
-        obj, _ = cls.unpack_with_size(data)
-        return obj
+        _header = FeedHeader.unpack(data[0:2])
+        _samples = [
+            FeedData.unpack(data[_i : _i + 12]) for _i in range(2, len(data), 12)
+        ]
+        return cls(_header, _samples)
 
 
 # --- BLE SERVICES ---

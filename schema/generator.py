@@ -22,6 +22,9 @@ CHARACTERISTIC_PROPS = {
 # Properties whose payload is received from the device and unpacked.
 INBOUND_PROPS = {"read", "notify", "indicate"}
 
+# Byte sizes of the primitive field types.
+PRIMITIVE_SIZES = {"uint8": 1, "int8": 1, "uint16": 2, "int24": 3, "uint32": 4}
+
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -106,6 +109,50 @@ def parse_service(name, obj):
     }
 
 
+def compute_sizes(model):
+    """Attach byte sizes to structs and their fields for direct-offset unpacking.
+
+    Sets struct["size"] (None if the struct has variable length, e.g. it
+    contains a list) and field["size"] / field["item_size"] for each field.
+    """
+    structs_by_name = {s["name"]: s for s in model["structs"]}
+    enum_names = {e["name"] for e in model["enums"]}
+    struct_sizes = {}
+
+    def type_size(type_name):
+        if type_name in PRIMITIVE_SIZES:
+            return PRIMITIVE_SIZES[type_name]
+        if type_name in enum_names:
+            return 1
+        if type_name in structs_by_name:
+            return resolve(type_name)
+        return None
+
+    def resolve(name):
+        if name in struct_sizes:
+            return struct_sizes[name]
+        struct_sizes[name] = None  # guards against recursive definitions
+        total = 0
+        fixed = True
+        for field in structs_by_name[name]["fields"]:
+            if field["is_list"]:
+                field["size"] = None
+                field["item_size"] = type_size(field["type"])
+                fixed = False
+            else:
+                size = type_size(field["type"])
+                field["size"] = size
+                if size is None:
+                    fixed = False
+                elif fixed:
+                    total += size
+        struct_sizes[name] = total if fixed else None
+        return struct_sizes[name]
+
+    for struct in model["structs"]:
+        struct["size"] = resolve(struct["name"])
+
+
 def parse_schema():
     model = {"enums": [], "structs": [], "services": []}
     for name, obj in inspect.getmembers(schema, inspect.isclass):
@@ -118,6 +165,7 @@ def parse_schema():
             model["structs"].append(parse_struct(name, obj))
         elif issubclass(obj, schema.Service) and obj is not schema.Service:
             model["services"].append(parse_service(name, obj))
+    compute_sizes(model)
     return model
 
 
