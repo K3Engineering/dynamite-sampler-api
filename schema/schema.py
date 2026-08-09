@@ -1,23 +1,11 @@
 """API for the dynamite sampler board."""
 
-from typing import Generic, TypeVar
+import enum
 import dataclasses
+from typing import Generic, TypeVar
 
 
-## BLE services and characteristics structure
-# Baseclasses and typing boiler plate stuff to make the actual API a bit more readable.
-class Service:
-    UUID: str
-
-
-class Characteristic:
-    UUID: str
-
-
-class Struct:
-    pass
-
-
+# Base primitive types (used as markers for the generator)
 class uint8:
     pass
 
@@ -31,7 +19,7 @@ class uint16:
 
 
 class int24:
-    pass
+    pass  # 3-byte signed int
 
 
 class u32:
@@ -46,62 +34,43 @@ class Bytes:
     pass
 
 
-# TODO not sure if this is the right way to do this
-class Array(TypeVar):
+T = TypeVar("T")
+
+
+class CharacteristicRead(Generic[T]):
     pass
 
 
-class Enum:
+class CharacteristicWrite(Generic[T]):
     pass
 
 
-_UnpackResultT = TypeVar("_UnpackResultT")
-_PackType = TypeVar("_PackType")
-
-
-class CharacteristicRead(Characteristic, Generic[_UnpackResultT]):
-    """Base class for BLE characteristics that can be read."""
-
+class CharacteristicNotify(Generic[T]):
     pass
 
 
-class CharacteristicWrite(Characteristic, Generic[_PackType]):
-    """Base class for BLE characteristics that can be writen."""
-
+class CharacteristicIndicate(Generic[T]):
     pass
 
 
-class CharacteristicNotify(Characteristic, Generic[_UnpackResultT]):
-    """Base class for BLE characteristics that can be read."""
-
-    pass
-
-
-class CharacteristicIndicate(Characteristic, Generic[_UnpackResultT]):
-    """Base class for BLE characteristics that can be read."""
-
-    pass
+class Service:
+    UUID: str
+    advertised: bool = False
 
 
 ### Dynamite Sampler API classes
 
-## dataclasses TODO change
-# TODO figure out where to specify little endian
 
+class OTACode(enum.IntEnum):
+    """OTA command and response codes."""
 
-@dataclasses.dataclass
-class OTACode:
-    # TODO figure out the best way to encode what the code is. Maybe enum?
-    # NOP = bytearray.fromhex("00")
-
-    # REQUEST = bytearray.fromhex("01")
-    # REQUEST_ACK = bytearray.fromhex("02")
-    # REQUEST_NAK = bytearray.fromhex("03")
-
-    # DONE = bytearray.fromhex("04")
-    # DONE_ACK = bytearray.fromhex("05")
-    # DONE_NAK = bytearray.fromhex("06")
-    code: uint8
+    NOP = 0x00
+    REQUEST = 0x01
+    REQUEST_ACK = 0x02
+    REQUEST_NAK = 0x03
+    DONE = 0x04
+    DONE_ACK = 0x05
+    DONE_NAK = 0x06
 
 
 @dataclasses.dataclass
@@ -109,7 +78,6 @@ class ADCConfigData:
     """Information how the ADC is configured via the registers."""
 
     version: uint8
-    # TODO the registers need parsing too. Maybe use ctypes? Maybe something else?
     id: uint16
     status: uint16
     mode: uint16
@@ -121,7 +89,7 @@ class ADCConfigData:
 class FeedHeader:
     """Packet header prepended to each BLE ADC feed notification."""
 
-    sample_sequence_number: uint16  # Running sample counter
+    sample_sequence_number: uint16
 
 
 @dataclasses.dataclass
@@ -139,29 +107,25 @@ class FeedPacket:
     """A full BLE ADC feed notification: header + list of samples."""
 
     header: FeedHeader
-    samples: Array[FeedData]  # TODO is this the best way to represent this?
+    samples: list[FeedData]
 
 
 ## Services
 
 
 class DynamiteSampler(Service):
-    """Service that sends the ADC values (the force measurements).
-    This service's UUID is advertised, and can be used to filter scanning."""
+    """Service that sends the ADC values (the force measurements)."""
 
     UUID = "e331016b-6618-4f8f-8997-1a2c7c9e5fa3"
+    advertised = True
 
     class ADCFeed(CharacteristicNotify[FeedPacket]):
-        """Characteristic that streams the ADC values. Only has BLE Notifications.
-
-        Each notification is a packet with a 2-byte header (see FeedHeader) followed by
-        concatenated 12-byte ADC samples (4 channels x 3 bytes each, signed little-endian).
-        """
+        """Streams the ADC values. Concatenated 12-byte ADC samples."""
 
         UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
     class ADCConfig(CharacteristicRead[ADCConfigData]):
-        """Characteristic (Read-only) of the ADC configuration values."""
+        """Read-only ADC configuration values."""
 
         UUID = "adcc0f19-2575-4502-9a48-0e99974eb34f"
 
@@ -172,7 +136,7 @@ class OTA(Service):
     class Control(CharacteristicRead[OTACode], CharacteristicWrite[OTACode]):
         UUID = "7ad671aa-21c0-46a4-b722-270e3ae3d830"
 
-    class Data:
+    class Data(CharacteristicWrite[Bytes]):
         UUID = "23408888-1f40-4cd8-9b89-ca8d45f8a5b0"
 
 
@@ -186,7 +150,7 @@ class TxPower(Service):
 
 
 class DeviceInfo(Service):
-    """Read-only device info. The UUIDs are 16 bit hex."""
+    """Read-only device info."""
 
     UUID = "180A"
 
@@ -197,11 +161,7 @@ class DeviceInfo(Service):
         UUID = "2A26"
 
     class HardwareRevision(CharacteristicRead[Utf8String]):
-        """Board model, e.g. 'v700P'"""
-
         UUID = "2A27"
 
     class TxPowerLevel(CharacteristicRead[int8]):
-        """get TX power in dbm"""
-
         UUID = "2A07"

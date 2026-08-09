@@ -1,0 +1,136 @@
+# AUTO-GENERATED FILE. DO NOT EDIT.
+import struct
+from enum import IntEnum
+from dataclasses import dataclass
+from typing import List
+
+# Helper to unpack 3-byte signed integers (int24)
+def _unpack_int24(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset:offset+3], byteorder='little', signed=True)
+
+# Helper to pack 3-byte signed integers (int24)
+def _pack_int24(value: int) -> bytes:
+    return value.to_bytes(3, byteorder='little', signed=True)
+
+{% macro map_type(t) -%}
+{% if t == 'uint8' %}int{% elif t == 'int8' %}int{% elif t == 'uint16' %}int{% elif t == 'int24' %}int{% elif t == 'u32' %}int{% elif t == 'Utf8String' %}str{% elif t == 'Bytes' %}bytes{% else %}{{ t }}{% endif %}
+{%- endmacro %}
+
+{% macro struct_format(t) -%}
+{% if t == 'uint8' %}B{% elif t == 'int8' %}b{% elif t == 'uint16' %}H{% elif t == 'u32' %}I{% endif %}
+{%- endmacro %}
+
+{% macro get_size(t) -%}
+{% if t == 'uint8' or t == 'int8' %}1{% elif t == 'uint16' %}2{% elif t == 'int24' %}3{% elif t == 'u32' %}4{% endif %}
+{%- endmacro %}
+
+# --- ENUMS ---
+{% for enum in enums %}
+class {{ enum.name }}(IntEnum):
+{% for key, val in enum.members.items() %}
+    {{ key }} = {{ val }}
+{% endfor %}
+
+{% endfor %}
+
+# --- DATACLASSES / STRUCTS ---
+{% for struct in structs %}
+@dataclass
+class {{ struct.name }}:
+{% for field in struct.fields %}
+    {% if field.is_list %}
+    {{ field.name }}: List[{{ map_type(field.type) }}]
+    {% else %}
+    {{ field.name }}: {{ map_type(field.type) }}
+    {% endif %}
+{% endfor %}
+
+    @classmethod
+    def unpack(cls, data: bytes) -> '{{ struct.name }}':
+        offset = 0
+        {% for field in struct.fields %}
+        {% if field.is_list %}
+        # Variable length list unpacking
+        _{{ field.name }} = []
+        while offset < len(data):
+            item, bytes_read = {{ field.type }}.unpack_with_size(data[offset:])
+            _{{ field.name }}.append(item)
+            offset += bytes_read
+        {% elif field.type in ['uint8', 'int8', 'uint16', 'u32'] %}
+        _{{ field.name }} = struct.unpack_from('<{{ struct_format(field.type) }}', data, offset)[0]
+        offset += {{ get_size(field.type) }}
+        {% elif field.type == 'int24' %}
+        _{{ field.name }} = _unpack_int24(data, offset)
+        offset += 3
+        {% elif field.type in enums | map(attribute='name') %}
+        _{{ field.name }} = {{ field.type }}(struct.unpack_from('<B', data, offset)[0])
+        offset += 1
+        {% else %}
+        _{{ field.name }}, bytes_read = {{ field.type }}.unpack_with_size(data[offset:])
+        offset += bytes_read
+        {% endif %}
+        {% endfor %}
+        return cls({% for field in struct.fields %}_{{ field.name }}{% if not loop.last %}, {% endif %}{% endfor %})
+
+    @classmethod
+    def unpack_with_size(cls, data: bytes) -> tuple['{{ struct.name }}', int]:
+        """Returns instantiated object and number of bytes consumed."""
+        obj = cls.unpack(data)
+        # Calculate size based on static fields (ignoring variable lists for this helper)
+        size = {% for field in struct.fields %}{% if field.type in ['uint8', 'int8'] %}1{% elif field.type == 'uint16' %}2{% elif field.type == 'int24' %}3{% elif field.type == 'u32' %}4{% else %}0{% endif %}{% if not loop.last %} + {% endif %}{% endfor %}
+        
+        return obj, size
+
+{% endfor %}
+
+# --- BLE SERVICES ---
+{% for service in services %}
+class {{ service.name }}Service:
+    UUID = "{{ service.uuid }}"
+    
+    {% for char in service.characteristics %}
+    class {{ char.name }}:
+        UUID = "{{ char.uuid }}"
+        {% for prop in char.props %}
+        # Capability: {{ prop.type }} -> Payload: {{ prop.payload }}
+        {% endfor %}
+        
+        {% for prop in char.props %}
+        {% if prop.type in ['read', 'notify', 'indicate'] %}
+        @staticmethod
+        def parse(data: bytes) -> {{ map_type(prop.payload) }}:
+            {% if prop.payload in ['uint8', 'int8', 'uint16', 'u32'] %}
+            return struct.unpack('<{{ struct_format(prop.payload) }}', data)[0]
+            {% elif prop.payload == 'int24' %}
+            return _unpack_int24(data, 0)
+            {% elif prop.payload == 'Utf8String' %}
+            return data.decode('utf-8')
+            {% elif prop.payload == 'Bytes' %}
+            return data
+            {% elif prop.payload in enums | map(attribute='name') %}
+            return {{ prop.payload }}(struct.unpack('<B', data)[0])
+            {% else %}
+            return {{ prop.payload }}.unpack(data)
+            {% endif %}
+        {% endif %}
+        {% if prop.type == 'write' %}
+        @staticmethod
+        def serialize(value: {{ map_type(prop.payload) }}) -> bytes:
+            {% if prop.payload in ['uint8', 'int8', 'uint16', 'u32'] %}
+            return struct.pack('<{{ struct_format(prop.payload) }}', value)
+            {% elif prop.payload == 'int24' %}
+            return _pack_int24(value)
+            {% elif prop.payload == 'Utf8String' %}
+            return value.encode('utf-8')
+            {% elif prop.payload == 'Bytes' %}
+            return value
+            {% elif prop.payload in enums | map(attribute='name') %}
+            return struct.pack('<B', value.value)
+            {% else %}
+            raise NotImplementedError("Serialization for custom structs not yet implemented")
+            {% endif %}
+        {% endif %}
+        {% endfor %}
+        
+    {% endfor %}
+{% endfor %}
