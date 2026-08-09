@@ -1,64 +1,25 @@
-"""API for the dynamite sampler board."""
+"""API schema for the dynamite sampler board.
 
-import enum
+WARNING: do not add ``from __future__ import annotations`` to this module.
+The generator reads annotations as live objects; string annotations would
+silently break parsing.
+"""
+
 import dataclasses
-from typing import Generic, TypeVar
+import enum
 
-
-# Base primitive types (used as markers for the generator)
-class uint8:
-    pass
-
-
-class int8:
-    pass
-
-
-class uint16:
-    pass
-
-
-class int24:
-    pass  # 3-byte signed int
-
-
-class uint32:
-    pass
-
-
-class Utf8String:
-    pass
-
-
-class Bytes:
-    pass
-
-
-T = TypeVar("T")
-
-
-class CharacteristicRead(Generic[T]):
-    pass
-
-
-class CharacteristicWrite(Generic[T]):
-    pass
-
-
-class CharacteristicNotify(Generic[T]):
-    pass
-
-
-class CharacteristicIndicate(Generic[T]):
-    pass
-
-
-class Service:
-    UUID: str
-    advertised: bool = False
-
-
-### Dynamite Sampler API classes
+from schema.ble_dsl import (
+    Bytes,
+    CharacteristicNotify,
+    CharacteristicRead,
+    CharacteristicWrite,
+    Service,
+    Utf8String,
+    int8,
+    int24,
+    uint8,
+    uint16,
+)
 
 
 class OTACode(enum.IntEnum):

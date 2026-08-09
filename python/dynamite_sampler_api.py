@@ -5,11 +5,6 @@ from enum import IntEnum
 from typing import Generic, TypeVar
 
 
-def _pack_int24(value: int) -> bytes:
-    """Packs an integer as a 3-byte little-endian signed integer."""
-    return value.to_bytes(3, byteorder="little", signed=True)
-
-
 # --- BASE CLASSES ---
 class BLEService:
     UUID: str
@@ -30,7 +25,11 @@ class BLECharacteristicRead(BLECharacteristic, Generic[_UnpackResultT]):
     @classmethod
     def unpack(cls, b: bytearray | bytes) -> _UnpackResultT:
         """Parses raw characteristic data into some sort of object."""
-        raise NotImplementedError("Subclasses must implement the unpack method.")
+        return cls._unpack(bytes(b))
+
+    @classmethod
+    def _unpack(cls, data: bytes) -> _UnpackResultT:
+        raise NotImplementedError("Subclasses must implement _unpack.")
 
 
 class BLECharacteristicWrite(BLECharacteristic, Generic[_PackType]):
@@ -84,6 +83,21 @@ class ADCConfigData:
 
 
 @dataclass
+class FeedHeader:
+    """
+    Packet header prepended to each BLE ADC feed notification.
+    """
+
+    sample_sequence_number: int
+
+    @classmethod
+    def unpack(cls, data: bytes) -> "FeedHeader":
+        """Unpacks this struct from raw bytes."""
+        _sample_sequence_number = struct.unpack_from("<H", data, 0)[0]
+        return cls(_sample_sequence_number)
+
+
+@dataclass
 class FeedData:
     """
     A single ADC sample that contains all 4 channels.
@@ -102,21 +116,6 @@ class FeedData:
         _ch2 = int.from_bytes(data[6:9], byteorder="little", signed=True)
         _ch3 = int.from_bytes(data[9:12], byteorder="little", signed=True)
         return cls(_ch0, _ch1, _ch2, _ch3)
-
-
-@dataclass
-class FeedHeader:
-    """
-    Packet header prepended to each BLE ADC feed notification.
-    """
-
-    sample_sequence_number: int
-
-    @classmethod
-    def unpack(cls, data: bytes) -> "FeedHeader":
-        """Unpacks this struct from raw bytes."""
-        _sample_sequence_number = struct.unpack_from("<H", data, 0)[0]
-        return cls(_sample_sequence_number)
 
 
 @dataclass
@@ -139,63 +138,6 @@ class FeedPacket:
 
 
 # --- BLE SERVICES ---
-class DeviceInfo(BLEService):
-    """
-    Read-only device info.
-    """
-
-    UUID = "180A"
-    advertised = False
-
-    class FirmwareRevision(BLECharacteristicRead[str]):
-        """
-        Firmware revision string.
-        """
-
-        UUID = "2A26"
-
-        @classmethod
-        def unpack(cls, b: bytearray | bytes) -> str:
-            data = bytes(b)
-            return data.decode("utf-8")
-
-    class HardwareRevision(BLECharacteristicRead[str]):
-        """
-        Hardware revision string.
-        """
-
-        UUID = "2A27"
-
-        @classmethod
-        def unpack(cls, b: bytearray | bytes) -> str:
-            data = bytes(b)
-            return data.decode("utf-8")
-
-    class ManufacturerName(BLECharacteristicRead[str]):
-        """
-        Manufacturer name string.
-        """
-
-        UUID = "2A29"
-
-        @classmethod
-        def unpack(cls, b: bytearray | bytes) -> str:
-            data = bytes(b)
-            return data.decode("utf-8")
-
-    class TxPowerLevel(BLECharacteristicRead[int]):
-        """
-        Current transmit power level in dBm.
-        """
-
-        UUID = "2A07"
-
-        @classmethod
-        def unpack(cls, b: bytearray | bytes) -> int:
-            data = bytes(b)
-            return struct.unpack("<b", data)[0]
-
-
 class DynamiteSampler(BLEService):
     """
     Service that sends the ADC values (the force measurements).
@@ -203,18 +145,6 @@ class DynamiteSampler(BLEService):
 
     UUID = "e331016b-6618-4f8f-8997-1a2c7c9e5fa3"
     advertised = True
-
-    class ADCConfig(BLECharacteristicRead[ADCConfigData]):
-        """
-        Read-only ADC configuration values.
-        """
-
-        UUID = "adcc0f19-2575-4502-9a48-0e99974eb34f"
-
-        @classmethod
-        def unpack(cls, b: bytearray | bytes) -> ADCConfigData:
-            data = bytes(b)
-            return ADCConfigData.unpack(data)
 
     class ADCFeed(BLECharacteristicRead[FeedPacket]):
         """
@@ -224,9 +154,19 @@ class DynamiteSampler(BLEService):
         UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
         @classmethod
-        def unpack(cls, b: bytearray | bytes) -> FeedPacket:
-            data = bytes(b)
+        def _unpack(cls, data: bytes) -> FeedPacket:
             return FeedPacket.unpack(data)
+
+    class ADCConfig(BLECharacteristicRead[ADCConfigData]):
+        """
+        Read-only ADC configuration values.
+        """
+
+        UUID = "adcc0f19-2575-4502-9a48-0e99974eb34f"
+
+        @classmethod
+        def _unpack(cls, data: bytes) -> ADCConfigData:
+            return ADCConfigData.unpack(data[0:11])
 
 
 class OTA(BLEService):
@@ -245,9 +185,8 @@ class OTA(BLEService):
         UUID = "7ad671aa-21c0-46a4-b722-270e3ae3d830"
 
         @classmethod
-        def unpack(cls, b: bytearray | bytes) -> OTACode:
-            data = bytes(b)
-            return OTACode(struct.unpack("<B", data)[0])
+        def _unpack(cls, data: bytes) -> OTACode:
+            return OTACode(struct.unpack_from("<B", data, 0)[0])
 
         @classmethod
         def pack(cls, data: OTACode) -> bytes:
@@ -283,3 +222,56 @@ class TxPower(BLEService):
         @classmethod
         def pack(cls, data: int) -> bytes:
             return struct.pack("<b", data)
+
+
+class DeviceInfo(BLEService):
+    """
+    Read-only device info.
+    """
+
+    UUID = "180A"
+    advertised = False
+
+    class ManufacturerName(BLECharacteristicRead[str]):
+        """
+        Manufacturer name string.
+        """
+
+        UUID = "2A29"
+
+        @classmethod
+        def _unpack(cls, data: bytes) -> str:
+            return data.decode("utf-8")
+
+    class FirmwareRevision(BLECharacteristicRead[str]):
+        """
+        Firmware revision string.
+        """
+
+        UUID = "2A26"
+
+        @classmethod
+        def _unpack(cls, data: bytes) -> str:
+            return data.decode("utf-8")
+
+    class HardwareRevision(BLECharacteristicRead[str]):
+        """
+        Hardware revision string.
+        """
+
+        UUID = "2A27"
+
+        @classmethod
+        def _unpack(cls, data: bytes) -> str:
+            return data.decode("utf-8")
+
+    class TxPowerLevel(BLECharacteristicRead[int]):
+        """
+        Current transmit power level in dBm.
+        """
+
+        UUID = "2A07"
+
+        @classmethod
+        def _unpack(cls, data: bytes) -> int:
+            return struct.unpack_from("<b", data, 0)[0]

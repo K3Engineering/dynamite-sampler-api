@@ -1,44 +1,83 @@
-{# Shared type table: struct format codes for primitive types. #}
-{% set INT_FORMATS = {'uint8': 'B', 'int8': 'b', 'uint16': 'H', 'uint32': 'I'} %}
-{% set ENUM_NAMES = enums | map(attribute='name') | list %}
+{#-
+  Renders the Python BLE API from the resolved IR (see schema/generator.py).
 
+  Render context: enums (EnumDef), structs (StructDef), services (ServiceDef).
+  Every type reference is a resolved TypeRef with kind ('primitive', 'enum',
+  'struct', 'string', 'bytes'), name, size (bytes; None when variable
+  length), signed, and struct_code (None when no struct format code exists,
+  e.g. 3-byte ints). Struct fields carry their absolute byte offset, so this
+  template contains no type-name dispatch: a whole-characteristic payload is
+  just a value unpacked at offset 0.
+-#}
 {% macro docstring(text, ind) -%}
 {{ ind }}"""
 {{ ind }}{{ text | replace('\n', '\n' ~ ind) }}
 {{ ind }}"""
 {%- endmacro %}
 
+{# Python type annotation for a resolved type. #}
 {% macro py_type(t) -%}
-{% if t in INT_FORMATS or t == 'int24' %}int{% elif t == 'Utf8String' %}str{% elif t == 'Bytes' %}bytes{% else %}{{ t }}{% endif %}
+{% if t.kind == 'primitive' %}int{% elif t.kind == 'string' %}str{% elif t.kind == 'bytes' %}bytes{% else %}{{ t.name }}{% endif %}
 {%- endmacro %}
 
-{# Unpacks one struct field from `data` at the absolute offset in `ns.offset`. #}
-{% macro unpack_field(field, ns) -%}
+{# Slice of `data` covering type t starting at byte offset `off`.
+   Variable-length types run to the end of the buffer. #}
+{% macro data_slice(t, off) -%}
+{%- if t.size is none -%}
+{%- if off is number and off == 0 -%}data{%- else -%}data[{{ off }}:]{%- endif -%}
+{%- elif off is number -%}
+data[{{ off }}:{{ off + t.size }}]
+{%- else -%}
+data[{{ off }}:{{ off }} + {{ t.size }}]
+{%- endif -%}
+{%- endmacro %}
+
+{# Expression that unpacks one value of resolved type t from `data` at byte
+   offset `off`. Used for struct fields (absolute offsets) and for whole
+   characteristic payloads (offset 0) alike. #}
+{% macro unpack_expr(t, off) -%}
+{%- if t.kind == 'primitive' or t.kind == 'enum' -%}
+{%- if t.struct_code -%}
+{%- set raw = "struct.unpack_from('<" ~ t.struct_code ~ "', data, " ~ off ~ ")[0]" -%}
+{%- else -%}
+{%- set raw = "int.from_bytes(" ~ data_slice(t, off) ~ ", byteorder='little', signed=" ~ t.signed ~ ")" -%}
+{%- endif -%}
+{%- if t.kind == 'enum' -%}{{ t.name }}({{ raw }}){%- else -%}{{ raw }}{%- endif -%}
+{%- elif t.kind == 'string' -%}
+{{ data_slice(t, off) }}.decode('utf-8')
+{%- elif t.kind == 'bytes' -%}
+{{ data_slice(t, off) }}
+{%- else -%}
+{{ t.name }}.unpack({{ data_slice(t, off) }})
+{%- endif -%}
+{%- endmacro %}
+
+{# Statement that unpacks one struct field (scalar or repeat-to-end list). #}
+{% macro unpack_field_stmt(field) -%}
 {% if field.is_list %}
-_{{ field.name }} = [{{ field.type }}.unpack(data[_i:_i + {{ field.item_size }}]) for _i in range({{ ns.offset }}, len(data), {{ field.item_size }})]
-{% elif field.type in INT_FORMATS %}
-_{{ field.name }} = struct.unpack_from('<{{ INT_FORMATS[field.type] }}', data, {{ ns.offset }})[0]
-{% set ns.offset = ns.offset + field.size %}
-{% elif field.type == 'int24' %}
-_{{ field.name }} = int.from_bytes(data[{{ ns.offset }}:{{ ns.offset + field.size }}], byteorder='little', signed=True)
-{% set ns.offset = ns.offset + field.size %}
-{% elif field.type in ENUM_NAMES %}
-_{{ field.name }} = {{ field.type }}(data[{{ ns.offset }}])
-{% set ns.offset = ns.offset + 1 %}
-{% else %}
-_{{ field.name }} = {{ field.type }}.unpack(data[{{ ns.offset }}:{{ ns.offset + field.size }}])
-{% set ns.offset = ns.offset + field.size %}
-{% endif %}
-{%- endmacro %}
-
-{# Expression that unpacks a whole-characteristic payload from `data`. #}
-{% macro unpack_payload_expr(t) -%}
-{% if t in INT_FORMATS %}struct.unpack('<{{ INT_FORMATS[t] }}', data)[0]{% elif t == 'int24' %}int.from_bytes(data, byteorder='little', signed=True){% elif t == 'Utf8String' %}data.decode('utf-8'){% elif t == 'Bytes' %}data{% elif t in ENUM_NAMES %}{{ t }}(struct.unpack('<B', data)[0]){% else %}{{ t }}.unpack(data){% endif %}
+_{{ field.name }} = [{{ unpack_expr(field.type, '_i') }} for _i in range({{ field.offset }}, len(data), {{ field.type.size }})]
+{%- else %}
+_{{ field.name }} = {{ unpack_expr(field.type, field.offset) }}
+{%- endif %}
 {%- endmacro %}
 
 {# Statement that packs a whole-characteristic payload from `data`. #}
 {% macro pack_payload_stmt(t) -%}
-{% if t in INT_FORMATS %}return struct.pack('<{{ INT_FORMATS[t] }}', data){% elif t == 'int24' %}return _pack_int24(data){% elif t == 'Utf8String' %}return data.encode('utf-8'){% elif t == 'Bytes' %}return data{% elif t in ENUM_NAMES %}return struct.pack('<B', data.value){% else %}raise NotImplementedError("Serialization for custom structs is not yet implemented"){% endif %}
+{% if t.kind == 'primitive' and t.struct_code %}
+return struct.pack('<{{ t.struct_code }}', data)
+{%- elif t.kind == 'primitive' %}
+return data.to_bytes({{ t.size }}, byteorder='little', signed={{ t.signed }})
+{%- elif t.kind == 'enum' and t.struct_code %}
+return struct.pack('<{{ t.struct_code }}', data.value)
+{%- elif t.kind == 'enum' %}
+return int(data).to_bytes({{ t.size }}, byteorder='little')
+{%- elif t.kind == 'string' %}
+return data.encode('utf-8')
+{%- elif t.kind == 'bytes' %}
+return data
+{%- else %}
+raise NotImplementedError("Packing struct payloads is not yet implemented")
+{%- endif %}
 {%- endmacro %}
 
 # AUTO-GENERATED FILE. DO NOT EDIT.
@@ -46,11 +85,6 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Generic, TypeVar
-
-
-def _pack_int24(value: int) -> bytes:
-    """Packs an integer as a 3-byte little-endian signed integer."""
-    return value.to_bytes(3, byteorder='little', signed=True)
 
 
 # --- BASE CLASSES ---
@@ -73,7 +107,11 @@ class BLECharacteristicRead(BLECharacteristic, Generic[_UnpackResultT]):
     @classmethod
     def unpack(cls, b: bytearray | bytes) -> _UnpackResultT:
         """Parses raw characteristic data into some sort of object."""
-        raise NotImplementedError("Subclasses must implement the unpack method.")
+        return cls._unpack(bytes(b))
+
+    @classmethod
+    def _unpack(cls, data: bytes) -> _UnpackResultT:
+        raise NotImplementedError("Subclasses must implement _unpack.")
 
 
 class BLECharacteristicWrite(BLECharacteristic, Generic[_PackType]):
@@ -115,9 +153,8 @@ class {{ struct.name }}:
     @classmethod
     def unpack(cls, data: bytes) -> '{{ struct.name }}':
         """Unpacks this struct from raw bytes."""
-{% set ns = namespace(offset=0) %}
 {% for field in struct.fields %}
-        {{ unpack_field(field, ns) -}}
+        {{ unpack_field_stmt(field) }}
 {% endfor %}
         return cls({% for field in struct.fields %}_{{ field.name }}{% if not loop.last %}, {% endif %}{% endfor %})
 {% endfor %}
@@ -145,9 +182,8 @@ class {{ service.name }}(BLEService):
 {% if char.read_payload %}
 
         @classmethod
-        def unpack(cls, b: bytearray | bytes) -> {{ py_type(char.read_payload) }}:
-            data = bytes(b)
-            return {{ unpack_payload_expr(char.read_payload) }}
+        def _unpack(cls, data: bytes) -> {{ py_type(char.read_payload) }}:
+            return {{ unpack_expr(char.read_payload, 0) }}
 {% endif %}
 {% if char.write_payload %}
 
