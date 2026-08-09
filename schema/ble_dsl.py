@@ -74,19 +74,23 @@ class Bytes:
 T = TypeVar("T")
 
 
-class CharacteristicRead(Generic[T]):
+class Characteristic:
+    UUID: str
+
+
+class CharacteristicRead(Characteristic, Generic[T]):
     pass
 
 
-class CharacteristicWrite(Generic[T]):
+class CharacteristicWrite(Characteristic, Generic[T]):
     pass
 
 
-class CharacteristicNotify(Generic[T]):
+class CharacteristicNotify(Characteristic, Generic[T]):
     pass
 
 
-class CharacteristicIndicate(Generic[T]):
+class CharacteristicIndicate(Characteristic, Generic[T]):
     pass
 
 
