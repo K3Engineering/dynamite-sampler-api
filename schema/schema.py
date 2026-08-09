@@ -122,7 +122,7 @@ class DynamiteSampler(Service):
     class ADCFeed(CharacteristicNotify[FeedPacket]):
         """Streams the ADC values. Concatenated 12-byte ADC samples."""
 
-        UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+        UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"  # TODO change from sample code
 
     class ADCConfig(CharacteristicRead[ADCConfigData]):
         """Read-only ADC configuration values."""
@@ -133,17 +133,17 @@ class DynamiteSampler(Service):
 class OTA(Service):
     """Over-the-air firmware update service."""
 
-    UUID = "d6f1d96d-594c-4c53-b1c6-144a1dfde6d8"
+    UUID = "d6f1d96d-594c-4c53-b1c6-144a1dfde6d8"  # TODO change from sample code
 
     class Control(CharacteristicRead[OTACode], CharacteristicWrite[OTACode]):
         """OTA control point used to exchange command and response codes."""
 
-        UUID = "7ad671aa-21c0-46a4-b722-270e3ae3d830"
+        UUID = "7ad671aa-21c0-46a4-b722-270e3ae3d830"  # TODO change from sample code
 
     class Data(CharacteristicWrite[Bytes]):
         """OTA data stream used to write firmware image chunks."""
 
-        UUID = "23408888-1f40-4cd8-9b89-ca8d45f8a5b0"
+        UUID = "23408888-1f40-4cd8-9b89-ca8d45f8a5b0"  # TODO change from sample code
 
 
 class TxPower(Service):
