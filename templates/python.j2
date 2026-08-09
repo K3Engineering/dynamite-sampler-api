@@ -52,6 +52,11 @@ class BLECharacteristicWrite(BLECharacteristic, Generic[_PackType]):
 # --- ENUMS ---
 {% for enum in enums %}
 class {{ enum.name }}(IntEnum):
+{% if enum.docstring %}
+    """
+    {{ enum.docstring | replace('\n', '\n    ') }}
+    """
+{% endif %}
 {% for key, val in enum.members.items() %}
     {{ key }} = {{ val }}
 {% endfor %}
@@ -61,6 +66,11 @@ class {{ enum.name }}(IntEnum):
 {% for struct in structs %}
 @dataclass
 class {{ struct.name }}:
+{% if struct.docstring %}
+    """
+    {{ struct.docstring | replace('\n', '\n    ') }}
+    """
+{% endif %}
 {% for field in struct.fields %}
     {% if field.is_list %}
     {{ field.name }}: List[{{ map_type(field.type) }}]
@@ -96,12 +106,27 @@ class {{ struct.name }}:
         {% endfor %}
         return cls({% for field in struct.fields %}_{{ field.name }}{% if not loop.last %}, {% endif %}{% endfor %})
 
+    @classmethod
+    def unpack_with_size(cls, data: bytes) -> tuple['{{ struct.name }}', int]:
+        """Returns instantiated object and number of bytes consumed."""
+        obj = cls.unpack(data)
+        # Calculate size based on static fields (ignoring variable lists for this helper)
+        size = {% for field in struct.fields %}{% if field.type in ['uint8', 'int8'] %}1{% elif field.type == 'uint16' %}2{% elif field.type == 'int24' %}3{% elif field.type == 'u32' %}4{% else %}0{% endif %}{% if not loop.last %} + {% endif %}{% endfor %}
+        
+        return obj, size
+
 {% endfor %}
 
 # --- BLE SERVICES ---
 {% for service in services %}
 class {{ service.name }}(BLEService):
+{% if service.docstring %}
+    """
+    {{ service.docstring | replace('\n', '\n    ') }}
+    """
+{% endif %}
     UUID = "{{ service.uuid }}"
+    advertised = {{ service.advertised }}
 
 {% for char in service.characteristics %}
     {% set ns = namespace(has_read=False, has_write=False, read_payload='Bytes', write_payload='Bytes') %}
@@ -121,6 +146,11 @@ class {{ service.name }}(BLEService):
     {% if not char_bases %}{% set _ = char_bases.append('BLECharacteristic') %}{% endif %}
 
     class {{ char.name }}({{ char_bases | join(', ') }}):
+{% if char.docstring %}
+        """
+        {{ char.docstring | replace('\n', '\n        ') }}
+        """
+{% endif %}
         UUID = "{{ char.uuid }}"
 
         {% if ns.has_read %}

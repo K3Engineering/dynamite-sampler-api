@@ -2,6 +2,7 @@ import inspect
 import enum
 import typing
 import dataclasses
+import black
 from jinja2 import Environment, FileSystemLoader
 
 # Import your schema
@@ -24,9 +25,13 @@ def parse_schema():
 
     # 1. Parse Enums
     for name, obj in inspect.getmembers(schema, inspect.isclass):
-        if issubclass(obj, enum.IntEnum):
+        if issubclass(obj, enum.IntEnum) and obj is not enum.IntEnum:
             api_model["enums"].append(
-                {"name": name, "members": {e.name: e.value for e in obj}}
+                {
+                    "name": name,
+                    "docstring": inspect.getdoc(obj),
+                    "members": {e.name: e.value for e in obj},
+                }
             )
 
     # 2. Parse Dataclasses (Structs)
@@ -42,14 +47,22 @@ def parse_schema():
                         "is_list": type_info["is_list"],
                     }
                 )
-            api_model["structs"].append({"name": name, "fields": fields})
+            api_model["structs"].append(
+                {
+                    "name": name,
+                    "docstring": inspect.getdoc(obj),
+                    "fields": fields,
+                }
+            )
 
     # 3. Parse Services and Characteristics
     for name, obj in inspect.getmembers(schema, inspect.isclass):
         if issubclass(obj, schema.Service) and obj is not schema.Service:
             service_data = {
                 "name": name,
+                "docstring": inspect.getdoc(obj),
                 "uuid": getattr(obj, "UUID", ""),
+                "advertised": getattr(obj, "advertised", False),
                 "characteristics": [],
             }
 
@@ -60,6 +73,7 @@ def parse_schema():
 
                 char_data = {
                     "name": char_name,
+                    "docstring": inspect.getdoc(char_obj),
                     "uuid": getattr(char_obj, "UUID", ""),
                     "props": [],
                 }
@@ -103,7 +117,13 @@ if __name__ == "__main__":
     template = env.get_template("python.j2")
     output = template.render(model)
 
+    # Format output using Black
+    try:
+        output = black.format_str(output, mode=black.Mode())
+    except Exception as e:
+        print(f"Warning: Code formatting with Black failed: {e}")
+
     with open("python/dynamite_sampler_api.py", "w") as f:
         f.write(output)
 
-    print("Successfully generated generated_api.py")
+    print("Successfully generated dynamite_sampler_api.py")
