@@ -1,129 +1,143 @@
-import inspect
-import enum
-import typing
+"""Generates language-specific API files from the BLE schema."""
+
 import dataclasses
+import enum
+import inspect
+import pathlib
+import typing
+
 import black
 from jinja2 import Environment, FileSystemLoader
 
-# Import your schema
 import schema
+
+# Characteristic base classes mapped to the GATT property they provide.
+CHARACTERISTIC_PROPS = {
+    schema.CharacteristicRead: "read",
+    schema.CharacteristicWrite: "write",
+    schema.CharacteristicNotify: "notify",
+    schema.CharacteristicIndicate: "indicate",
+}
+
+# Properties whose payload is received from the device and unpacked.
+INBOUND_PROPS = {"read", "notify", "indicate"}
+
+ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
+
+
+def get_docstring(obj):
+    """Return the docstring defined on obj itself, ignoring inherited ones.
+
+    inspect.getdoc() walks the MRO, which would pick up docstrings from base
+    classes such as typing.Generic for classes that define no docstring.
+    """
+    doc = obj.__dict__.get("__doc__")
+    return inspect.cleandoc(doc) if doc else None
 
 
 def get_base_type_name(t):
     """Helper to extract type names, including from lists."""
-    origin = typing.get_origin(t)
-    if origin is list:
-        args = typing.get_args(t)
-        return {"is_list": True, "type": args[0].__name__}
-    elif inspect.isclass(t):
+    if typing.get_origin(t) is list:
+        return {"is_list": True, "type": typing.get_args(t)[0].__name__}
+    if inspect.isclass(t):
         return {"is_list": False, "type": t.__name__}
     return {"is_list": False, "type": str(t)}
 
 
+def parse_enum(name, obj):
+    return {
+        "name": name,
+        "docstring": get_docstring(obj),
+        "members": {member.name: member.value for member in obj},
+    }
+
+
+def parse_struct(name, obj):
+    fields = [
+        {"name": field.name, **get_base_type_name(field.type)}
+        for field in dataclasses.fields(obj)
+    ]
+    return {"name": name, "docstring": get_docstring(obj), "fields": fields}
+
+
+def parse_characteristic(name, obj):
+    """Parse a characteristic class, or return None if it isn't one."""
+    props = []
+    read_payload = None
+    write_payload = None
+    for base in getattr(obj, "__orig_bases__", ()):
+        prop = CHARACTERISTIC_PROPS.get(typing.get_origin(base) or base)
+        if prop is None:
+            continue
+        props.append(prop)
+        args = typing.get_args(base)
+        payload = args[0].__name__ if args else "Bytes"
+        if prop in INBOUND_PROPS:
+            read_payload = payload
+        else:
+            write_payload = payload
+
+    if not props:
+        return None
+
+    return {
+        "name": name,
+        "docstring": get_docstring(obj),
+        "uuid": getattr(obj, "UUID", ""),
+        "props": props,
+        "read_payload": read_payload,
+        "write_payload": write_payload,
+    }
+
+
+def parse_service(name, obj):
+    characteristics = []
+    for char_name, char_obj in inspect.getmembers(obj, inspect.isclass):
+        char_data = parse_characteristic(char_name, char_obj)
+        if char_data:
+            characteristics.append(char_data)
+
+    return {
+        "name": name,
+        "docstring": get_docstring(obj),
+        "uuid": getattr(obj, "UUID", ""),
+        "advertised": getattr(obj, "advertised", False),
+        "characteristics": characteristics,
+    }
+
+
 def parse_schema():
-    api_model = {"enums": [], "structs": [], "services": []}
-
-    # 1. Parse Enums
+    model = {"enums": [], "structs": [], "services": []}
     for name, obj in inspect.getmembers(schema, inspect.isclass):
-        if issubclass(obj, enum.IntEnum) and obj is not enum.IntEnum:
-            api_model["enums"].append(
-                {
-                    "name": name,
-                    "docstring": inspect.getdoc(obj),
-                    "members": {e.name: e.value for e in obj},
-                }
-            )
-
-    # 2. Parse Dataclasses (Structs)
-    for name, obj in inspect.getmembers(schema, inspect.isclass):
-        if dataclasses.is_dataclass(obj):
-            fields = []
-            for f in dataclasses.fields(obj):
-                type_info = get_base_type_name(f.type)
-                fields.append(
-                    {
-                        "name": f.name,
-                        "type": type_info["type"],
-                        "is_list": type_info["is_list"],
-                    }
-                )
-            api_model["structs"].append(
-                {
-                    "name": name,
-                    "docstring": inspect.getdoc(obj),
-                    "fields": fields,
-                }
-            )
-
-    # 3. Parse Services and Characteristics
-    for name, obj in inspect.getmembers(schema, inspect.isclass):
-        if issubclass(obj, schema.Service) and obj is not schema.Service:
-            service_data = {
-                "name": name,
-                "docstring": inspect.getdoc(obj),
-                "uuid": getattr(obj, "UUID", ""),
-                "advertised": getattr(obj, "advertised", False),
-                "characteristics": [],
-            }
-
-            # Find characteristics inside the service
-            for char_name, char_obj in inspect.getmembers(obj, inspect.isclass):
-                if char_name.startswith("__"):
-                    continue
-
-                char_data = {
-                    "name": char_name,
-                    "docstring": inspect.getdoc(char_obj),
-                    "uuid": getattr(char_obj, "UUID", ""),
-                    "props": [],
-                }
-
-                # Look at base classes to see if it's Read, Write, Notify
-                if hasattr(char_obj, "__orig_bases__"):
-                    for base in char_obj.__orig_bases__:
-                        base_origin = typing.get_origin(base) or base
-                        base_name = getattr(base_origin, "__name__", "")
-
-                        if base_name in [
-                            "CharacteristicRead",
-                            "CharacteristicWrite",
-                            "CharacteristicNotify",
-                            "CharacteristicIndicate",
-                        ]:
-                            prop_type = base_name.replace("Characteristic", "").lower()
-                            # Get the generic type argument (e.g., the payload type)
-                            args = typing.get_args(base)
-                            payload_type = args[0].__name__ if args else "Bytes"
-
-                            char_data["props"].append(
-                                {"type": prop_type, "payload": payload_type}
-                            )
-
-                if char_data["props"]:
-                    service_data["characteristics"].append(char_data)
-
-            api_model["services"].append(service_data)
-
-    return api_model
+        # Skip classes imported into the schema module from elsewhere.
+        if obj.__module__ != schema.__name__:
+            continue
+        if issubclass(obj, enum.IntEnum):
+            model["enums"].append(parse_enum(name, obj))
+        elif dataclasses.is_dataclass(obj):
+            model["structs"].append(parse_struct(name, obj))
+        elif issubclass(obj, schema.Service) and obj is not schema.Service:
+            model["services"].append(parse_service(name, obj))
+    return model
 
 
-if __name__ == "__main__":
-    model = parse_schema()
-
-    # Render Python Template
+def generate_python(model):
     env = Environment(
-        loader=FileSystemLoader("templates"), trim_blocks=True, lstrip_blocks=True
+        loader=FileSystemLoader(ROOT_DIR / "templates"),
+        trim_blocks=True,
+        lstrip_blocks=True,
     )
-    template = env.get_template("python.j2")
-    output = template.render(model)
+    output = env.get_template("python.j2").render(model)
 
-    # Format output using Black
     try:
         output = black.format_str(output, mode=black.Mode())
     except Exception as e:
         print(f"Warning: Code formatting with Black failed: {e}")
 
-    with open("python/dynamite_sampler_api.py", "w") as f:
-        f.write(output)
+    out_path = ROOT_DIR / "python" / "dynamite_sampler_api.py"
+    out_path.write_text(output, encoding="utf-8")
+    print(f"Successfully generated {out_path}")
 
-    print("Successfully generated dynamite_sampler_api.py")
+
+if __name__ == "__main__":
+    generate_python(parse_schema())

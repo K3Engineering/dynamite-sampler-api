@@ -22,7 +22,7 @@ class int24:
     pass  # 3-byte signed int
 
 
-class u32:
+class uint32:
     pass
 
 
@@ -131,20 +131,28 @@ class DynamiteSampler(Service):
 
 
 class OTA(Service):
+    """Over-the-air firmware update service."""
+
     UUID = "d6f1d96d-594c-4c53-b1c6-144a1dfde6d8"
 
     class Control(CharacteristicRead[OTACode], CharacteristicWrite[OTACode]):
+        """OTA control point used to exchange command and response codes."""
+
         UUID = "7ad671aa-21c0-46a4-b722-270e3ae3d830"
 
     class Data(CharacteristicWrite[Bytes]):
+        """OTA data stream used to write firmware image chunks."""
+
         UUID = "23408888-1f40-4cd8-9b89-ca8d45f8a5b0"
 
 
 class TxPower(Service):
+    """Service to configure the radio transmit power."""
+
     UUID = "74788a4c-72aa-4180-a478-59e969b959c9"
 
     class TxPowerSet(CharacteristicWrite[int8]):
-        """set TX power in dbm"""
+        """Sets the TX power in dBm."""
 
         UUID = "7478c418-35d3-4c3d-99d9-2de090159664"
 
@@ -155,13 +163,21 @@ class DeviceInfo(Service):
     UUID = "180A"
 
     class ManufacturerName(CharacteristicRead[Utf8String]):
+        """Manufacturer name string."""
+
         UUID = "2A29"
 
     class FirmwareRevision(CharacteristicRead[Utf8String]):
+        """Firmware revision string."""
+
         UUID = "2A26"
 
     class HardwareRevision(CharacteristicRead[Utf8String]):
+        """Hardware revision string."""
+
         UUID = "2A27"
 
     class TxPowerLevel(CharacteristicRead[int8]):
+        """Current transmit power level in dBm."""
+
         UUID = "2A07"
