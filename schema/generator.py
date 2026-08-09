@@ -103,7 +103,7 @@ if __name__ == "__main__":
     template = env.get_template("python.j2")
     output = template.render(model)
 
-    with open("generated_api.py", "w") as f:
+    with open("python/dynamite_sampler_api.py", "w") as f:
         f.write(output)
 
     print("Successfully generated generated_api.py")
